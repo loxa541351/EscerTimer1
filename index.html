@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>異世客計時系統 | 即時控場儀表板</title>
+  <!-- 支援 iOS 加入主畫面全螢幕顯示 -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="異世客控場" />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- React & ReactDOM CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Google Fonts: JetBrains Mono & Noto Sans TC -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@600;700;800&family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
+
+  <style>
+    body {
+      font-family: 'Noto Sans TC', sans-serif;
+      background-color: #07090e;
+      color: #f8fafc;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .font-mono-timer {
+      font-family: 'JetBrains Mono', monospace;
+      font-variant-numeric: tabular-nums;
+    }
+    ::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.4);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(100, 116, 139, 0.5);
+      border-radius: 4px;
+    }
+    @keyframes pulse-urgent {
+      0%, 100% { opacity: 1; text-shadow: 0 0 18px rgba(239, 68, 68, 0.9); transform: scale(1); }
+      50% { opacity: 0.65; text-shadow: 0 0 6px rgba(239, 68, 68, 0.4); transform: scale(0.985); }
+    }
+    .animate-urgent {
+      animation: pulse-urgent 1.2s infinite ease-in-out;
+    }
+    @keyframes flash-timeout {
+      0%, 100% { background-color: rgba(127, 29, 29, 0.55); border-color: #ef4444; box-shadow: 0 0 20px rgba(239, 68, 68, 0.6) inset; }
+      50% { background-color: rgba(24, 24, 27, 0.9); border-color: #7f1d1d; box-shadow: none; }
+    }
+    .animate-timeout-box {
+      animation: flash-timeout 0.8s infinite;
+    }
+  </style>
+</head>
+<body class="bg-[#07090e] text-slate-100 lg:h-screen lg:overflow-hidden">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useMemo } = React;
+
+    // ============================================================================
+    // 已自動帶入您的 Firebase 專案設定 (escertimer)
+    // ============================================================================
+    const DEFAULT_FIREBASE_CONFIG = {
+      apiKey: "AIzaSyCW0L0NXOIIy-MJcl4244P_o-HuEkHjcTU",
+      authDomain: "escertimer.firebaseapp.com",
+      databaseURL: "https://escertimer-default-rtdb.firebaseio.com",
+      projectId: "escertimer",
+      storageBucket: "escertimer.firebasestorage.app",
+      messagingSenderId: "386799605935",
+      appId: "1:386799605935:web:16e05c53060d497a909c5a"
+    };
+
+    // 7 大關卡資料庫與色調設定
+    const ROOMS_DATA = [
+      {
+        id: 'forest',
+        name: '森林之心',
+        theme: {
+          border: 'border-emerald-500/60',
+          glow: 'shadow-[0_0_20px_rgba(16,185,129,0.12)]',
+          headerBg: 'bg-gradient-to-r from-emerald-950/90 via-emerald-900/50 to-slate-900/90',
+          accentText: 'text-emerald-400',
+          badgeBg: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+          dotActive: 'bg-emerald-400 shadow-[0_0_8px_#34d399]',
+        },
+        stages: [
+          { range: '0~10分', min: 0, max: 10, items: ['打開石櫃', '解開太陽：3678', '葉子盒子：下左上左上右左下'] },
+          { range: '10~15分', min: 10, max: 15, items: ['翻譯精靈密語 Door the open', '喊出來開門進入第二間'] },
+          { range: '20~35分', min: 15, max: 35, items: ['拿到三樣聖物', '水：8489（絲帶 2+6, 8-4, 2*4, 9/1）', '木：9147（拼圖，低角度看）', '夜：61012（紅藍白連線，4個星座）'] },
+          { range: '35~40分', min: 35, max: 40, items: ['開合寶箱，合成弓箭', '讓女神手握箭尾，箭頭指向對方', '進入第三間'] },
+          { range: '40~55分', min: 40, max: 55, items: ['解開鈴鐺：6297（沒聲音的鈴鐺連線）', '解開石碑：3402（結合石碑，繁星點亮圖案）'] },
+          { range: '55分~', min: 55, max: 60, items: ['支線任務：2812（F.I.R.E英文字之間的間隔數量）'] }
+        ]
+      },
+      {
+        id: 'overlord',
+        name: '霸王',
+        theme: {
+          border: 'border-amber-700/70',
+          glow: 'shadow-[0_0_20px_rgba(180,83,9,0.15)]',
+          headerBg: 'bg-gradient-to-r from-[#3d2210] via-[#29170b] to-slate-900/90',
+          accentText: 'text-amber-400',
+          badgeBg: 'bg-amber-700/30 text-amber-200 border-amber-600/50',
+          dotActive: 'bg-amber-500 shadow-[0_0_8px_#f59e0b]',
+        },
+        stages: [
+          { range: '0~20分', min: 0, max: 20, items: ['第一間三題拿軍旗、進走廊', '1. 糧食路線：鼠猴兔羊蛇奔（襄、臨江、河南）', '2. 諸葛巡視、無一遺漏（走棋不重複）', '3. 化龍廟香爐放上三柱香'] },
+          { range: '20~30分', min: 20, max: 30, items: ['在監獄內解題拿繩索（長壽福貴祿）'] },
+          { range: '30~35分', min: 30, max: 35, items: ['拿到鑰匙出監獄'] },
+          { range: '35~45分', min: 35, max: 45, items: ['找到識別證（撫夜歸之心）', '拿到石柱說明書（拼竹簡）'] },
+          { range: '45~60分', min: 45, max: 60, items: ['解石柱 / 中斷、下斷、天、蛇、霜'] }
+        ]
+      },
+      {
+        id: 'judger',
+        name: '審判者',
+        theme: {
+          border: 'border-white/70',
+          glow: 'shadow-[0_0_20px_rgba(255,255,255,0.14)]',
+          headerBg: 'bg-gradient-to-r from-slate-700/90 via-slate-800/80 to-slate-900/90',
+          accentText: 'text-white',
+          badgeBg: 'bg-white/20 text-white border-white/50',
+          dotActive: 'bg-white shadow-[0_0_8px_#ffffff]',
+        },
+        stages: [
+          { range: '0~3分', min: 0, max: 3, items: ['提醒輸入記憶區密碼'] },
+          { range: '5~16分', min: 3, max: 16, items: ['開門拿到資料1並閱讀'] },
+          { range: '16~30分', min: 16, max: 30, items: ['開始並完成第 1 場審判', '（悲慘世界 513，救周明和 24568）'] },
+          { range: '30~40分', min: 30, max: 40, items: ['開始並完成第 2 場審判', '（救沈瑞德 ELMER）'] },
+          { range: '40~50分', min: 40, max: 50, items: ['開始並完成第 3 場審判', '（救陳金標 4927）'] },
+          { range: '50分~', min: 50, max: 60, items: ['若有人殺打開第 4 電箱'] }
+        ]
+      },
+      {
+        id: 'thief',
+        name: '盜義有道',
+        theme: {
+          border: 'border-slate-500/60',
+          glow: 'shadow-[0_0_20px_rgba(148,163,184,0.1)]',
+          headerBg: 'bg-gradient-to-r from-slate-800/90 via-slate-850 to-slate-900/90',
+          accentText: 'text-slate-300',
+          badgeBg: 'bg-slate-600/30 text-slate-200 border-slate-400/40',
+          dotActive: 'bg-slate-300 shadow-[0_0_8px_#cbd5e1]',
+        },
+        stages: [
+          { range: '0~12分', min: 0, max: 12, items: ['解除門鎖線路進入辦公室'] },
+          { range: '12~15分', min: 12, max: 15, items: ['開抽屜（綠紫紅黃、4258）'] },
+          { range: '15~35分', min: 15, max: 35, items: ['解四樣賭具', '撲克牌：9417', '麻將：5832', '骰子：6161', '籌碼：1705'] },
+          { range: '35~40分', min: 35, max: 40, items: ['按壓蛇雕像進遊戲間'] },
+          { range: '40~55分', min: 40, max: 55, items: ['遊戲間通關'] },
+          { range: '55~60分', min: 55, max: 60, items: ['拿到寶物，引爆炸彈'] }
+        ]
+      },
+      {
+        id: 'tiny_town',
+        name: '小小鎮',
+        theme: {
+          border: 'border-pink-500/60',
+          glow: 'shadow-[0_0_20px_rgba(236,72,153,0.14)]',
+          headerBg: 'bg-gradient-to-r from-pink-950/90 via-pink-900/40 to-slate-900/90',
+          accentText: 'text-pink-400',
+          badgeBg: 'bg-pink-500/20 text-pink-200 border-pink-400/40',
+          dotActive: 'bg-pink-400 shadow-[0_0_8px_#f472b6]',
+        },
+        stages: [
+          { range: '0~10分', min: 0, max: 10, items: ['解開書櫃鎖（72o 83r 25c c34）'] },
+          { range: '10~20分', min: 10, max: 20, items: ['放置第一塊巧克力', '解甜甜圈：上左右下左上下'] },
+          { range: '20~35分', min: 20, max: 35, items: ['漫畫家：5439', '公主房：1367'] },
+          { range: '35~45分', min: 35, max: 45, items: ['音樂家：低中高低高中低高', '樹屋：有缺角那塊斜著拼'] },
+          { range: '45~50分', min: 45, max: 50, items: ['解氣球屋'] },
+          { range: '50~60分', min: 50, max: 60, items: ['找遺忘日期 2/19'] }
+        ]
+      },
+      {
+        id: 'brave',
+        name: '是不是勇者',
+        theme: {
+          border: 'border-sky-500/60',
+          glow: 'shadow-[0_0_20px_rgba(14,165,233,0.14)]',
+          headerBg: 'bg-gradient-to-r from-sky-950/90 via-sky-900/50 to-slate-900/90',
+          accentText: 'text-sky-400',
+          badgeBg: 'bg-sky-500/20 text-sky-200 border-sky-400/40',
+          dotActive: 'bg-sky-400 shadow-[0_0_8px_#38bdf8]',
+        },
+        stages: [
+          { range: '0~5分', min: 0, max: 5, items: ['打開魔書', '（1234+5678=6912）'] },
+          { range: '5~15分', min: 5, max: 15, items: ['打開魔書第一層（5466）', '擊殺小怪'] },
+          { range: '15~20分', min: 15, max: 20, items: ['打敗石頭怪進第二間', '（咖白藍 > 藍白綠 > 綠藍 > 咖藍白）'] },
+          { range: '20~45分', min: 20, max: 45, items: ['蒐集石板（40分確認數量，少於3塊進去協助）', '魔書第二層（3172）', '1. 合作之間：37950 #', '2. 智慧之間：8161', '3. 黑到紅：5723', '4. 大蜘蛛網：反射雷射光', '5. 商店：用錢購買'] },
+          { range: '45~50分', min: 45, max: 50, items: ['打開蜘蛛大門', '藍蜘蛛：8752', '紅蜘蛛：9632'] },
+          { range: '50~60分', min: 50, max: 60, items: ['翻開魔書打大魔王'] }
+        ]
+      },
+      {
+        id: 'curse',
+        name: '邪咒曲',
+        theme: {
+          border: 'border-purple-500/60',
+          glow: 'shadow-[0_0_22px_rgba(147,51,234,0.18)]',
+          headerBg: 'bg-gradient-to-r from-black via-zinc-950 to-purple-950/60',
+          accentText: 'text-purple-300',
+          badgeBg: 'bg-purple-950/80 text-purple-200 border-purple-500/50',
+          dotActive: 'bg-purple-400 shadow-[0_0_8px_#c084fc]',
+        },
+        stages: [
+          { range: '0~5分', min: 0, max: 5, items: ['看錄影帶 OP1', '任務1打開微波爐', '解開盲人鎖：1278', '拿到任務3廁所鑰匙', '（玩家到廚房時放機關）'] },
+          { range: '5~10分', min: 5, max: 10, items: ['流理臺下找到鑰匙進到廁所', '在下水孔拿到任務4走廊鑰匙'] },
+          { range: '10~15分', min: 10, max: 15, items: ['開門至走廊', '手伸進去鞋櫃拿 OP2 錄影帶'] },
+          { range: '15~20分', min: 15, max: 20, items: ['任務5餵廁所的馬桶怪喝水', '拿到任務6娃娃', '櫃子：0237（444m = 7h24m ?:13->09:?）', '（打開櫃子後放下鋼琴機關）'] },
+          { range: '20~30分', min: 20, max: 30, items: ['進入臥室', '任務7解開床下怪物 2754', '打開抽屜 5395 得到 OP3', '（玩家看牆壁時按鬧鐘）'] },
+          { range: '30~45分', min: 30, max: 45, items: ['看完 OP3 錄影帶按門鈴敲門', '拿轉軸斷床上怪物的頭打開衣櫃', '用電線（抽屜）插電，電死怪物', '拼出拼布 0371，拿到 OP4 錄影帶'] },
+          { range: '45~50分', min: 45, max: 50, items: ['看完 OP4 錄影帶', '用營釘戳海盜桶', '拿到恭喜過關鑰匙打開大門', '噴煙及開紫光燈', '鏡櫃左下暗鎖打開找到規則及死法'] },
+          { range: '50~60分', min: 50, max: 60, items: ['找出邪咒曲的旋律（水絞斷雷刃毒）', '反彈邪咒曲（DAEDEB）'] }
+        ]
+      }
+    ];
+
+    const MAX_SECONDS = 3600;
+    const STORAGE_KEY = 'escapeholic_rooms_state_v1';
+
+    const createInitialState = () => {
+      const initial = {};
+      ROOMS_DATA.forEach((r) => {
+        initial[r.id] = {
+          status: 'idle',
+          startTime: null,
+          accumulatedSeconds: 0,
+          manualStageIndex: -1,
+          updatedAt: Date.now()
+        };
+      });
+      return initial;
+    };
+
+    function App() {
+      const [now, setNow] = useState(Date.now());
+      const [roomsState, setRoomsState] = useState(() => {
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) return { ...createInitialState(), ...JSON.parse(saved) };
+        } catch (e) {}
+        return createInitialState();
+      });
+
+      const [resetConfirmRoomId, setResetConfirmRoomId] = useState(null);
+      const [showSyncModal, setShowSyncModal] = useState(false);
+      const [syncStatus, setSyncStatus] = useState('connecting'); // 'connecting' | 'connected' | 'error'
+      const [syncErrorMsg, setSyncErrorMsg] = useState('');
+
+      const fbDbRef = useRef(null);
+      const bcRef = useRef(null);
+
+      // 每 250ms 更新一次時鐘
+      useEffect(() => {
+        const timer = setInterval(() => setNow(Date.now()), 250);
+        return () => clearInterval(timer);
+      }, []);
+
+      // 本機分頁同步
+      useEffect(() => {
+        if ('BroadcastChannel' in window) {
+          const bc = new BroadcastChannel('escapeholic_sync_channel');
+          bc.onmessage = (ev) => {
+            if (ev.data && ev.data.type === 'SYNC_STATE') {
+              setRoomsState(ev.data.payload);
+            }
+          };
+          bcRef.current = bc;
+          return () => bc.close();
+        }
+      }, []);
+
+      // 初始化 Firebase Realtime Database 連線
+      useEffect(() => {
+        const initFirebase = async () => {
+          try {
+            if (!window.firebase) {
+              await new Promise((res, rej) => {
+                const s1 = document.createElement('script');
+                s1.src = 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js';
+                s1.onload = res;
+                s1.onerror = rej;
+                document.head.appendChild(s1);
+              });
+              await new Promise((res, rej) => {
+                const s2 = document.createElement('script');
+                s2.src = 'https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js';
+                s2.onload = res;
+                s2.onerror = rej;
+                document.head.appendChild(s2);
+              });
+            }
+
+            if (!window.firebase.apps.length) {
+              window.firebase.initializeApp(DEFAULT_FIREBASE_CONFIG);
+            }
+            const db = window.firebase.database();
+            const roomRef = db.ref('escapeholic_dashboard_v1/rooms');
+            fbDbRef.current = roomRef;
+
+            roomRef.on(
+              'value',
+              (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                  setRoomsState((prev) => ({ ...prev, ...data }));
+                  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+                } else {
+                  roomRef.set(roomsState);
+                }
+                setSyncStatus('connected');
+                setSyncErrorMsg('');
+              },
+              (err) => {
+                setSyncStatus('error');
+                setSyncErrorMsg(err.message || '無法讀寫資料庫，請確認 Firebase Rules 是否已設為 true');
+              }
+            );
+          } catch (e) {
+            setSyncStatus('error');
+            setSyncErrorMsg('載入 Firebase SDK 失敗，請檢查網路連線。');
+          }
+        };
+
+        initFirebase();
+
+        return () => {
+          if (fbDbRef.current) fbDbRef.current.off();
+        };
+      }, []);
+
+      const updateRoomState = (roomId, updater) => {
+        setRoomsState((prev) => {
+          const currentRoom = prev[roomId] || createInitialState()[roomId];
+          const nextRoom = typeof updater === 'function' ? updater(currentRoom) : { ...currentRoom, ...updater };
+          const updatedAll = {
+            ...prev,
+            [roomId]: { ...nextRoom, updatedAt: Date.now() }
+          };
+
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedAll));
+          if (bcRef.current) {
+            bcRef.current.postMessage({ type: 'SYNC_STATE', payload: updatedAll });
+          }
+          if (fbDbRef.current && syncStatus === 'connected') {
+            fbDbRef.current.child(roomId).set(updatedAll[roomId]);
+          }
+          return updatedAll;
+        });
+      };
+
+      const getElapsedSeconds = (roomState) => {
+        if (!roomState) return 0;
+        let total = roomState.accumulatedSeconds || 0;
+        if (roomState.status === 'running' && roomState.startTime) {
+          total += Math.floor((now - roomState.startTime) / 1000);
+        }
+        return Math.max(0, Math.min(MAX_SECONDS, total));
+      };
+
+      useEffect(() => {
+        ROOMS_DATA.forEach((room) => {
+          const st = roomsState[room.id];
+          if (st && st.status === 'running') {
+            const elapsed = getElapsedSeconds(st);
+            if (elapsed >= MAX_SECONDS) {
+              updateRoomState(room.id, {
+                status: 'timeout',
+                startTime: null,
+                accumulatedSeconds: MAX_SECONDS
+              });
+            }
+          }
+        });
+      }, [now, roomsState]);
+
+      const handleToggleStartPause = (roomId) => {
+        const st = roomsState[roomId];
+        const elapsed = getElapsedSeconds(st);
+        if (elapsed >= MAX_SECONDS || st.status === 'timeout') return;
+
+        if (st.status === 'running') {
+          updateRoomState(roomId, {
+            status: 'paused',
+            startTime: null,
+            accumulatedSeconds: elapsed
+          });
+        } else {
+          updateRoomState(roomId, {
+            status: 'running',
+            startTime: Date.now(),
+            accumulatedSeconds: elapsed
+          });
+        }
+      };
+
+      const handleAdjustMinute = (roomId, deltaMinutes) => {
+        const st = roomsState[roomId];
+        const elapsed = getElapsedSeconds(st);
+        const nextSeconds = Math.max(0, Math.min(MAX_SECONDS, elapsed + deltaMinutes * 60));
+
+        if (nextSeconds >= MAX_SECONDS) {
+          updateRoomState(roomId, {
+            status: 'timeout',
+            startTime: null,
+            accumulatedSeconds: MAX_SECONDS
+          });
+        } else {
+          updateRoomState(roomId, {
+            status: st.status === 'timeout' ? 'paused' : st.status,
+            startTime: st.status === 'running' ? Date.now() : null,
+            accumulatedSeconds: nextSeconds
+          });
+        }
+      };
+
+      const confirmResetRoom = () => {
+        if (!resetConfirmRoomId) return;
+        updateRoomState(resetConfirmRoomId, {
+          status: 'idle',
+          startTime: null,
+          accumulatedSeconds: 0,
+          manualStageIndex: -1
+        });
+        setResetConfirmRoomId(null);
+      };
+
+      const getAutoStageIndex = (room, elapsedSeconds) => {
+        const currentMin = Math.floor(elapsedSeconds / 60);
+        let idx = 0;
+        for (let i = 0; i < room.stages.length; i++) {
+          if (currentMin >= room.stages[i].min) {
+            idx = i;
+          }
+        }
+        return idx;
+      };
+
+      const formatMMSS = (totalSeconds) => {
+        const mins = Math.floor(totalSeconds / 60);
+        const secs = totalSeconds % 60;
+        return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      };
+
+      const currentClockStr = useMemo(() => {
+        const d = new Date(now);
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const ss = String(d.getSeconds()).padStart(2, '0');
+        return `${hh}:${mm}:${ss}`;
+      }, [now]);
+
+      return (
+        <div className="min-h-screen lg:h-screen w-full flex flex-col bg-[#07090e] text-slate-100 select-none lg:overflow-hidden">
+          <header className="h-12 shrink-0 px-3 lg:px-5 bg-slate-950/90 border-b border-slate-800/80 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 shadow-[0_0_10px_#22d3ee]"></span>
+                <h1 className="text-base lg:text-lg font-black tracking-wider text-white">
+                  異世客計時系統
+                </h1>
+              </div>
+
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-900 border border-slate-700/80">
+                {syncStatus === 'connected' && (
+                  <>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 -ml-3.5"></span>
+                    <span className="text-emerald-300">Firebase 雲端即時同步中</span>
+                  </>
+                )}
+                {syncStatus === 'connecting' && (
+                  <>
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                    <span className="text-amber-300">連線雲端中...</span>
+                  </>
+                )}
+                {syncStatus === 'error' && (
+                  <>
+                    <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                    <span className="text-red-400" title={syncErrorMsg}>雲端連線異常（請檢查資料庫 Rules）</span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-800 px-3 py-1 rounded-lg">
+                <span className="text-[11px] text-slate-400 hidden sm:inline">現在時間</span>
+                <span className="font-mono-timer text-sm lg:text-base font-bold text-cyan-300 tracking-wider">
+                  {currentClockStr}
+                </span>
+              </div>
+              <button
+                onClick={() => setShowSyncModal(true)}
+                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition"
+              >
+                專案設定檢查
+              </button>
+            </div>
+          </header>
+
+          <main className="flex-1 p-2 lg:p-2.5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-2 lg:gap-2.5 lg:overflow-hidden">
+            {ROOMS_DATA.map((room) => {
+              const st = roomsState[room.id] || createInitialState()[room.id];
+              const elapsed = getElapsedSeconds(st);
+              const isTimeout = elapsed >= MAX_SECONDS || st.status === 'timeout';
+              const isRunning = st.status === 'running' && !isTimeout;
+              const isPaused = st.status === 'paused' && !isTimeout;
+
+              let timerTextClass = 'text-emerald-400 drop-shadow-[0_0_8px_rgba(52,211,153,0.3)]';
+              let timerBoxClass = 'bg-slate-950/90 border-slate-800/90';
+
+              if (isTimeout) {
+                timerTextClass = 'text-red-400 font-extrabold';
+                timerBoxClass = 'animate-timeout-box border-red-500';
+              } else if (elapsed >= 3300) {
+                timerTextClass = 'text-red-500 animate-urgent font-extrabold';
+                timerBoxClass = 'bg-red-950/30 border-red-500/80 shadow-[0_0_15px_rgba(239,68,68,0.25)]';
+              } else if (elapsed >= 3000) {
+                timerTextClass = 'text-amber-300 drop-shadow-[0_0_12px_rgba(251,191,36,0.75)]';
+                timerBoxClass = 'bg-amber-950/25 border-amber-500/70 shadow-[0_0_12px_rgba(245,158,11,0.2)]';
+              } else if (st.status === 'idle' && elapsed === 0) {
+                timerTextClass = 'text-slate-400';
+              }
+
+              const autoIdx = getAutoStageIndex(room, elapsed);
+              const isManualMode = st.manualStageIndex !== -1 && st.manualStageIndex !== undefined;
+              const activeStageIdx = isManualMode
+                ? Math.min(room.stages.length - 1, Math.max(0, st.manualStageIndex))
+                : autoIdx;
+              const currentStage = room.stages[activeStageIdx] || room.stages[0];
+
+              const handleNextStage = () => {
+                const nextIdx = (activeStageIdx + 1) % room.stages.length;
+                updateRoomState(room.id, { manualStageIndex: nextIdx });
+              };
+
+              const handlePrevStage = () => {
+                const prevIdx = (activeStageIdx - 1 + room.stages.length) % room.stages.length;
+                updateRoomState(room.id, { manualStageIndex: prevIdx });
+              };
+
+              const handleRestoreAuto = () => {
+                updateRoomState(room.id, { manualStageIndex: -1 });
+              };
+
+              return (
+                <section
+                  key={room.id}
+                  className={`flex flex-col rounded-xl bg-slate-900/90 border-2 ${room.theme.border} ${room.theme.glow} overflow-hidden lg:h-full`}
+                >
+                  <div className={`px-3 py-2.5 border-b border-slate-800/80 flex items-center justify-between gap-1 ${room.theme.headerBg}`}>
+                    <h2 className={`text-base xl:text-lg font-black tracking-wide truncate ${room.theme.accentText}`}>
+                      {room.name}
+                    </h2>
+                    <span
+                      className={`shrink-0 px-2 py-0.5 rounded text-[11px] font-bold border ${
+                        isTimeout
+                          ? 'bg-red-600 text-white border-red-400 animate-pulse'
+                          : isRunning
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+                          : isPaused
+                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+                          : 'bg-slate-800 text-slate-400 border-slate-700'
+                      }`}
+                    >
+                      {isTimeout ? '時間到' : isRunning ? '計時中' : isPaused ? '暫停中' : '未開始'}
+                    </span>
+                  </div>
+
+                  <div className={`mx-2 mt-2 px-2 py-2.5 rounded-lg border transition-all flex flex-col items-center justify-center relative ${timerBoxClass}`}>
+                    <div className="flex items-center justify-between w-full px-1">
+                      <button
+                        onClick={() => handleAdjustMinute(room.id, -1)}
+                        className="px-1.5 py-0.5 rounded bg-slate-800/90 hover:bg-slate-700 text-slate-400 hover:text-slate-200 text-[11px] font-mono-timer border border-slate-700/70 transition"
+                        title="減少 1 分鐘"
+                      >
+                        -1m
+                      </button>
+
+                      <div className={`font-mono-timer text-3xl xl:text-4xl font-extrabold tracking-tight leading-none ${timerTextClass}`}>
+                        {formatMMSS(elapsed)}
+                      </div>
+
+                      <button
+                        onClick={() => handleAdjustMinute(room.id, 1)}
+                        className="px-1.5 py-0.5 rounded bg-slate-800/90 hover:bg-slate-700 text-slate-400 hover:text-slate-200 text-[11px] font-mono-timer border border-slate-700/70 transition"
+                        title="增加 1 分鐘"
+                      >
+                        +1m
+                      </button>
+                    </div>
+
+                    {isTimeout && (
+                      <div className="mt-1 text-xs font-black tracking-widest text-red-200 bg-red-600/90 px-2.5 py-0.5 rounded animate-bounce">
+                        60:00 【時間到】
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-5 gap-1.5 px-2 mt-2">
+                    <button
+                      onClick={() => handleToggleStartPause(room.id)}
+                      disabled={isTimeout}
+                      className={`col-span-3 py-2 rounded-lg font-bold text-xs xl:text-sm flex items-center justify-center gap-1 transition shadow-sm ${
+                        isTimeout
+                          ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+                          : isRunning
+                          ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-[0_0_12px_rgba(245,158,11,0.3)]'
+                          : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-[0_0_12px_rgba(16,185,129,0.3)]'
+                      }`}
+                    >
+                      {isRunning ? '⏸ 暫停' : elapsed > 0 ? '▶ 繼續' : '▶ 開始'}
+                    </button>
+
+                    <button
+                      onClick={() => setResetConfirmRoomId(room.id)}
+                      className="col-span-2 py-2 rounded-lg font-bold text-xs xl:text-sm bg-rose-950/90 hover:bg-rose-600 text-rose-200 hover:text-white border border-rose-700/70 transition flex items-center justify-center"
+                    >
+                      ↺ 重置
+                    </button>
+                  </div>
+
+                  <div className="flex-1 flex flex-col mx-2 my-2 p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/90 lg:overflow-hidden">
+                    <div className="flex items-center justify-between gap-1 pb-2 mb-2 border-b border-slate-800/80 shrink-0">
+                      <span
+                        className={`text-[11px] font-bold px-1.5 py-0.5 rounded border ${
+                          isManualMode
+                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                            : 'bg-slate-800/90 text-slate-300 border-slate-700'
+                        }`}
+                      >
+                        {isManualMode ? '手動階段' : '自動跟隨'}
+                      </span>
+
+                      <span className="text-[11px] font-mono-timer text-slate-400">
+                        階段 {activeStageIdx + 1} / {room.stages.length}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1 mb-2 shrink-0">
+                      {room.stages.map((stItem, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => updateRoomState(room.id, { manualStageIndex: idx })}
+                          title={`切換至 ${stItem.range}`}
+                          className={`h-1.5 flex-1 rounded-full transition-all ${
+                            idx === activeStageIdx
+                              ? room.theme.dotActive
+                              : idx < activeStageIdx
+                              ? 'bg-slate-600'
+                              : 'bg-slate-800'
+                          }`}
+                        />
+                      ))}
+                    </div>
+
+                    {isManualMode && (
+                      <button
+                        onClick={handleRestoreAuto}
+                        className="mb-2 py-1 px-2 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 text-[11px] font-bold transition shrink-0 flex items-center justify-center gap-1"
+                      >
+                        ⚡ 還原自動跟隨時間
+                      </button>
+                    )}
+
+                    <div className="mb-2 shrink-0 flex items-center justify-between">
+                      <span className={`inline-block text-xs font-extrabold px-2 py-0.5 rounded border ${room.theme.badgeBg}`}>
+                        ⏱ {currentStage.range}
+                      </span>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto space-y-1.5 pr-0.5">
+                      {currentStage.items.map((itemText, i) => (
+                        <div
+                          key={i}
+                          className="p-2 rounded bg-slate-900/95 border border-slate-800/90 text-slate-100 text-xs xl:text-[13px] leading-relaxed font-medium break-words"
+                        >
+                          {itemText}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="pt-2 mt-2 border-t border-slate-800/80 grid grid-cols-3 gap-1.5 shrink-0">
+                      <button
+                        onClick={handlePrevStage}
+                        className="col-span-1 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold border border-slate-700 transition"
+                      >
+                        ◀ 上一個
+                      </button>
+                      <button
+                        onClick={handleNextStage}
+                        className="col-span-2 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-white text-[11px] xl:text-xs font-bold border border-slate-600 transition"
+                      >
+                        下一個提示 ▶
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              );
+            })}
+          </main>
+
+          {resetConfirmRoomId && (
+            <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-slate-900 border-2 border-rose-500/70 rounded-2xl max-w-sm w-full p-5 shadow-2xl">
+                <h3 className="text-lg font-black text-white flex items-center gap-2">
+                  <span className="text-rose-500">⚠️</span> 確認結束並重置？
+                </h3>
+                <p className="mt-2 text-sm text-slate-300 leading-relaxed">
+                  確認要結束並重置「
+                  <span className="font-bold text-white">
+                    {ROOMS_DATA.find((r) => r.id === resetConfirmRoomId)?.name}
+                  </span>
+                  」嗎？重置後時間將歸零為 <span className="font-mono-timer text-rose-400 font-bold">00:00</span>，且所有連線裝置會同步歸零。
+                </p>
+                <div className="mt-5 flex items-center justify-end gap-2.5">
+                  <button
+                    onClick={() => setResetConfirmRoomId(null)}
+                    className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-bold border border-slate-700 transition"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={confirmResetRoom}
+                    className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-sm font-bold shadow-[0_0_15px_rgba(225,29,72,0.4)] transition"
+                  >
+                    確認重置歸零
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showSyncModal && (
+            <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-5 shadow-2xl">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                  <h3 className="text-base font-black text-white">
+                    ☁️ Firebase 連線狀態
+                  </h3>
+                  <button
+                    onClick={() => setShowSyncModal(false)}
+                    className="text-slate-400 hover:text-white text-sm font-bold px-2 py-1"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="mt-4 space-y-3 text-xs text-slate-300 leading-relaxed">
+                  <p>
+                    目前已成功綁定您的專案：<code className="text-cyan-300">escertimer</code>
+                  </p>
+                  {syncErrorMsg ? (
+                    <div className="p-2.5 rounded-lg bg-red-950/80 border border-red-500/60 text-red-200 text-xs">
+                      ⚠️ {syncErrorMsg}
+                    </div>
+                  ) : (
+                    <div className="p-2.5 rounded-lg bg-emerald-950/80 border border-emerald-500/60 text-emerald-200 text-xs">
+                      ✅ 資料庫連線正常！請確認您在 Firebase Console 的 Realtime Database「規則 (Rules)」已設為讀寫皆可（<code className="text-white">".read": true, ".write": true</code>）。
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-5 flex items-center justify-end">
+                  <button
+                    onClick={() => setShowSyncModal(false)}
+                    className="px-4 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-black transition"
+                  >
+                    確定
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
